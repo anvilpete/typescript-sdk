@@ -616,7 +616,10 @@ export const zSessionConfigId = z.string();
  * This is intended to help Clients distinguish broadly common selectors (e.g. model selector vs
  * session mode selector vs thought/reasoning level) for UX purposes (keyboard shortcuts, icons,
  * placement). It MUST NOT be required for correctness. Clients MUST handle missing or unknown
- * categories gracefully (treat as `Other`).
+ * categories gracefully.
+ *
+ * Category names beginning with `_` are free for custom use, like other ACP extension methods.
+ * Category names that do not begin with `_` are reserved for the ACP spec.
  *
  * @experimental
  */
@@ -624,7 +627,7 @@ export const zSessionConfigOptionCategory = z.union([
   z.literal("mode"),
   z.literal("model"),
   z.literal("thought_level"),
-  z.literal("other"),
+  z.string(),
 ]);
 
 /**
@@ -1583,6 +1586,8 @@ export const zUnstructuredCommandInput = z.object({
 });
 
 /**
+ * unstructured
+ *
  * All text that was typed after the command name is provided as input.
  */
 export const zAvailableCommandInput = zUnstructuredCommandInput;
