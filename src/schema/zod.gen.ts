@@ -141,6 +141,19 @@ export const zBlobResourceContents = z.object({
  *
  * This capability is not part of the spec yet, and may be removed or changed at any point.
  *
+ * Response from closing a session.
+ *
+ * @experimental
+ */
+export const zCloseSessionResponse = z.object({
+  _meta: z.record(z.string(), z.unknown()).nullish(),
+});
+
+/**
+ * **UNSTABLE**
+ *
+ * This capability is not part of the spec yet, and may be removed or changed at any point.
+ *
  * Cost information for a session.
  *
  * @experimental
@@ -305,15 +318,9 @@ export const zKillTerminalResponse = z.object({
 });
 
 /**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
  * Request parameters for listing existing sessions.
  *
- * Only available if the Agent supports the `listSessions` capability.
- *
- * @experimental
+ * Only available if the Agent supports the `sessionCapabilities.list` capability.
  */
 export const zListSessionsRequest = z.object({
   _meta: z.record(z.string(), z.unknown()).nullish(),
@@ -673,6 +680,34 @@ export const zRequestPermissionResponse = z.object({
 });
 
 /**
+ * **UNSTABLE**
+ *
+ * This capability is not part of the spec yet, and may be removed or changed at any point.
+ *
+ * Capabilities for the `session/close` method.
+ *
+ * By supplying `{}` it means that the agent supports closing of sessions.
+ *
+ * @experimental
+ */
+export const zSessionCloseCapabilities = z.object({
+  _meta: z.record(z.string(), z.unknown()).nullish(),
+});
+
+/**
+ * **UNSTABLE**
+ *
+ * This capability is not part of the spec yet, and may be removed or changed at any point.
+ *
+ * A boolean on/off toggle session configuration option payload.
+ *
+ * @experimental
+ */
+export const zSessionConfigBoolean = z.object({
+  currentValue: z.boolean(),
+});
+
+/**
  * Unique identifier for a session configuration option value group.
  */
 export const zSessionConfigGroupId = z.string();
@@ -741,21 +776,27 @@ export const zSessionConfigSelect = z.object({
   options: zSessionConfigSelectOptions,
 });
 
-export const zSessionConfigOption = zSessionConfigSelect
-  .and(
-    z.object({
-      type: z.literal("select"),
-    }),
-  )
-  .and(
-    z.object({
-      _meta: z.record(z.string(), z.unknown()).nullish(),
-      category: zSessionConfigOptionCategory.nullish(),
-      description: z.string().nullish(),
-      id: zSessionConfigId,
-      name: z.string(),
-    }),
-  );
+export const zSessionConfigOption = z.intersection(
+  z.union([
+    zSessionConfigSelect.and(
+      z.object({
+        type: z.literal("select"),
+      }),
+    ),
+    zSessionConfigBoolean.and(
+      z.object({
+        type: z.literal("boolean"),
+      }),
+    ),
+  ]),
+  z.object({
+    _meta: z.record(z.string(), z.unknown()).nullish(),
+    category: zSessionConfigOptionCategory.nullish(),
+    description: z.string().nullish(),
+    id: zSessionConfigId,
+    name: z.string(),
+  }),
+);
 
 /**
  * Session configuration options have been updated.
@@ -803,6 +844,26 @@ export const zCancelNotification = z.object({
 export const zClientNotification = z.object({
   method: z.string(),
   params: z.union([zCancelNotification, zExtNotification]).nullish(),
+});
+
+/**
+ * **UNSTABLE**
+ *
+ * This capability is not part of the spec yet, and may be removed or changed at any point.
+ *
+ * Request parameters for closing an active session.
+ *
+ * If supported, the agent **must** cancel any ongoing work related to the session
+ * (treat it as if `session/cancel` was called) and then free up any resources
+ * associated with the session.
+ *
+ * Only available if the Agent supports the `session.close` capability.
+ *
+ * @experimental
+ */
+export const zCloseSessionRequest = z.object({
+  _meta: z.record(z.string(), z.unknown()).nullish(),
+  sessionId: zSessionId,
 });
 
 /**
@@ -920,13 +981,7 @@ export const zResumeSessionRequest = z.object({
 });
 
 /**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
  * Information about a session returned by session/list
- *
- * @experimental
  */
 export const zSessionInfo = z.object({
   _meta: z.record(z.string(), z.unknown()).nullish(),
@@ -937,13 +992,7 @@ export const zSessionInfo = z.object({
 });
 
 /**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
  * Response from listing sessions.
- *
- * @experimental
  */
 export const zListSessionsResponse = z.object({
   _meta: z.record(z.string(), z.unknown()).nullish(),
@@ -967,8 +1016,6 @@ export const zSessionInfoUpdate = z.object({
  * Capabilities for the `session/list` method.
  *
  * By supplying `{}` it means that the agent supports listing of sessions.
- *
- * Further capabilities can be added in the future for other means of filtering or searching the list.
  */
 export const zSessionListCapabilities = z.object({
   _meta: z.record(z.string(), z.unknown()).nullish(),
@@ -1097,21 +1144,6 @@ export const zSessionResumeCapabilities = z.object({
 });
 
 /**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
- * Capabilities for the `session/stop` method.
- *
- * By supplying `{}` it means that the agent supports stopping of sessions.
- *
- * @experimental
- */
-export const zSessionStopCapabilities = z.object({
-  _meta: z.record(z.string(), z.unknown()).nullish(),
-});
-
-/**
  * Session capabilities supported by the agent.
  *
  * As a baseline, all Agents **MUST** support `session/new`, `session/prompt`, `session/cancel`, and `session/update`.
@@ -1127,7 +1159,7 @@ export const zSessionCapabilities = z.object({
   fork: zSessionForkCapabilities.nullish(),
   list: zSessionListCapabilities.nullish(),
   resume: zSessionResumeCapabilities.nullish(),
-  stop: zSessionStopCapabilities.nullish(),
+  stop: zSessionCloseCapabilities.nullish(),
 });
 
 /**
@@ -1176,15 +1208,22 @@ export const zInitializeResponse = z.object({
   protocolVersion: zProtocolVersion,
 });
 
-/**
- * Request parameters for setting a session configuration option.
- */
-export const zSetSessionConfigOptionRequest = z.object({
-  _meta: z.record(z.string(), z.unknown()).nullish(),
-  configId: zSessionConfigId,
-  sessionId: zSessionId,
-  value: zSessionConfigValueId,
-});
+export const zSetSessionConfigOptionRequest = z.intersection(
+  z.union([
+    z.object({
+      type: z.literal("boolean"),
+      value: z.boolean(),
+    }),
+    z.object({
+      value: zSessionConfigValueId,
+    }),
+  ]),
+  z.object({
+    _meta: z.record(z.string(), z.unknown()).nullish(),
+    configId: zSessionConfigId,
+    sessionId: zSessionId,
+  }),
+);
 
 /**
  * Response to `session/set_config_option` method.
@@ -1250,39 +1289,6 @@ export const zStopReason = z.union([
   z.literal("refusal"),
   z.literal("cancelled"),
 ]);
-
-/**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
- * Request parameters for stopping an active session.
- *
- * If supported, the agent **must** cancel any ongoing work related to the session
- * (treat it as if `session/cancel` was called) and then free up any resources
- * associated with the session.
- *
- * Only available if the Agent supports the `session.stop` capability.
- *
- * @experimental
- */
-export const zStopSessionRequest = z.object({
-  _meta: z.record(z.string(), z.unknown()).nullish(),
-  sessionId: zSessionId,
-});
-
-/**
- * **UNSTABLE**
- *
- * This capability is not part of the spec yet, and may be removed or changed at any point.
- *
- * Response from stopping a session.
- *
- * @experimental
- */
-export const zStopSessionResponse = z.object({
-  _meta: z.record(z.string(), z.unknown()).nullish(),
-});
 
 /**
  * Embed a terminal created with `terminal/create` by its id.
@@ -1454,7 +1460,7 @@ export const zClientRequest = z.object({
       zListSessionsRequest,
       zForkSessionRequest,
       zResumeSessionRequest,
-      zStopSessionRequest,
+      zCloseSessionRequest,
       zSetSessionModeRequest,
       zSetSessionConfigOptionRequest,
       zPromptRequest,
@@ -1679,7 +1685,7 @@ export const zAgentResponse = z.union([
       zListSessionsResponse,
       zForkSessionResponse,
       zResumeSessionResponse,
-      zStopSessionResponse,
+      zCloseSessionResponse,
       zSetSessionModeResponse,
       zSetSessionConfigOptionResponse,
       zPromptResponse,
