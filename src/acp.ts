@@ -134,6 +134,28 @@ export class AgentSideConnection {
             validate.zSetSessionConfigOptionRequest.parse(params);
           return agent.setSessionConfigOption(validatedParams);
         }
+        case schema.AGENT_METHODS.nes_start: {
+          if (!agent.unstable_startNes) {
+            throw RequestError.methodNotFound(method);
+          }
+          const validatedParams = validate.zStartNesRequest.parse(params);
+          return agent.unstable_startNes(validatedParams);
+        }
+        case schema.AGENT_METHODS.nes_suggest: {
+          if (!agent.unstable_suggestNes) {
+            throw RequestError.methodNotFound(method);
+          }
+          const validatedParams = validate.zSuggestNesRequest.parse(params);
+          return agent.unstable_suggestNes(validatedParams);
+        }
+        case schema.AGENT_METHODS.nes_close: {
+          if (!agent.unstable_closeNes) {
+            throw RequestError.methodNotFound(method);
+          }
+          const validatedParams = validate.zCloseNesRequest.parse(params);
+          const result = await agent.unstable_closeNes(validatedParams);
+          return result ?? {};
+        }
         default:
           if (agent.extMethod) {
             return agent.extMethod(method, params as Record<string, unknown>);
@@ -150,6 +172,46 @@ export class AgentSideConnection {
         case schema.AGENT_METHODS.session_cancel: {
           const validatedParams = validate.zCancelNotification.parse(params);
           return agent.cancel(validatedParams);
+        }
+        case schema.AGENT_METHODS.document_did_open: {
+          if (!agent.unstable_didOpenDocument) return;
+          const validatedParams =
+            validate.zDidOpenDocumentNotification.parse(params);
+          return agent.unstable_didOpenDocument(validatedParams);
+        }
+        case schema.AGENT_METHODS.document_did_change: {
+          if (!agent.unstable_didChangeDocument) return;
+          const validatedParams =
+            validate.zDidChangeDocumentNotification.parse(params);
+          return agent.unstable_didChangeDocument(validatedParams);
+        }
+        case schema.AGENT_METHODS.document_did_close: {
+          if (!agent.unstable_didCloseDocument) return;
+          const validatedParams =
+            validate.zDidCloseDocumentNotification.parse(params);
+          return agent.unstable_didCloseDocument(validatedParams);
+        }
+        case schema.AGENT_METHODS.document_did_save: {
+          if (!agent.unstable_didSaveDocument) return;
+          const validatedParams =
+            validate.zDidSaveDocumentNotification.parse(params);
+          return agent.unstable_didSaveDocument(validatedParams);
+        }
+        case schema.AGENT_METHODS.document_did_focus: {
+          if (!agent.unstable_didFocusDocument) return;
+          const validatedParams =
+            validate.zDidFocusDocumentNotification.parse(params);
+          return agent.unstable_didFocusDocument(validatedParams);
+        }
+        case schema.AGENT_METHODS.nes_accept: {
+          if (!agent.unstable_acceptNes) return;
+          const validatedParams = validate.zAcceptNesNotification.parse(params);
+          return agent.unstable_acceptNes(validatedParams);
+        }
+        case schema.AGENT_METHODS.nes_reject: {
+          if (!agent.unstable_rejectNes) return;
+          const validatedParams = validate.zRejectNesNotification.parse(params);
+          return agent.unstable_rejectNes(validatedParams);
         }
         default:
           if (agent.extNotification) {
@@ -588,6 +650,9 @@ export class ClientSideConnection implements Agent {
    * - Connect to any specified MCP servers
    * - Return a unique session ID for future requests
    *
+   * The request may include `additionalDirectories` to expand the session's filesystem
+   * scope beyond `cwd` without changing the base for relative paths.
+   *
    * May return an `auth_required` error if the agent requires authentication.
    *
    * See protocol docs: [Session Setup](https://agentclientprotocol.com/protocol/session-setup)
@@ -610,6 +675,9 @@ export class ClientSideConnection implements Agent {
    * - Restore the session context and conversation history
    * - Connect to the specified MCP servers
    * - Stream the entire conversation history back to the client via notifications
+   *
+   * The request may include `additionalDirectories` to set the complete list of
+   * additional workspace roots for the loaded session.
    *
    * See protocol docs: [Loading Sessions](https://agentclientprotocol.com/protocol/session-setup#loading-sessions)
    */
@@ -634,6 +702,9 @@ export class ClientSideConnection implements Agent {
    * Creates a new session based on the context of an existing one, allowing
    * operations like generating summaries without affecting the original session's history.
    *
+   * The request may include `additionalDirectories` to set the complete list of
+   * additional workspace roots for the forked session.
+   *
    * This method is only available if the agent advertises the `session.fork` capability.
    *
    * @experimental
@@ -653,8 +724,8 @@ export class ClientSideConnection implements Agent {
    * This method is only available if the agent advertises the `listSessions` capability.
    *
    * Returns a list of sessions with metadata like session ID, working directory,
-   * title, and last update time. Supports filtering by working directory and
-   * cursor-based pagination.
+   * title, and last update time. Supports filtering by working directory,
+   * `additionalDirectories`, and cursor-based pagination.
    */
   async listSessions(
     params: schema.ListSessionsRequest,
@@ -676,6 +747,9 @@ export class ClientSideConnection implements Agent {
    *
    * The agent should resume the session context, allowing the conversation to continue
    * without replaying the message history (unlike `session/load`).
+   *
+   * The request may include `additionalDirectories` to set the complete list of
+   * additional workspace roots for the resumed session.
    *
    * @experimental
    */
@@ -848,6 +922,168 @@ export class ClientSideConnection implements Agent {
   async cancel(params: schema.CancelNotification): Promise<void> {
     return await this.#connection.sendNotification(
       schema.AGENT_METHODS.session_cancel,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Starts a NES (Next Edit Suggestions) session.
+   *
+   * @experimental
+   */
+  async unstable_startNes(
+    params: schema.StartNesRequest,
+  ): Promise<schema.StartNesResponse> {
+    return await this.#connection.sendRequest(
+      schema.AGENT_METHODS.nes_start,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Sends a NES suggestion request.
+   *
+   * @experimental
+   */
+  async unstable_suggestNes(
+    params: schema.SuggestNesRequest,
+  ): Promise<schema.SuggestNesResponse> {
+    return await this.#connection.sendRequest(
+      schema.AGENT_METHODS.nes_suggest,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Closes a NES session.
+   *
+   * @experimental
+   */
+  async unstable_closeNes(
+    params: schema.CloseNesRequest,
+  ): Promise<schema.CloseNesResponse> {
+    return (
+      (await this.#connection.sendRequest(
+        schema.AGENT_METHODS.nes_close,
+        params,
+      )) ?? {}
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Notifies the agent that a document was opened.
+   *
+   * @experimental
+   */
+  async unstable_didOpenDocument(
+    params: schema.DidOpenDocumentNotification,
+  ): Promise<void> {
+    return await this.#connection.sendNotification(
+      schema.AGENT_METHODS.document_did_open,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Notifies the agent that a document was changed.
+   *
+   * @experimental
+   */
+  async unstable_didChangeDocument(
+    params: schema.DidChangeDocumentNotification,
+  ): Promise<void> {
+    return await this.#connection.sendNotification(
+      schema.AGENT_METHODS.document_did_change,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Notifies the agent that a document was closed.
+   *
+   * @experimental
+   */
+  async unstable_didCloseDocument(
+    params: schema.DidCloseDocumentNotification,
+  ): Promise<void> {
+    return await this.#connection.sendNotification(
+      schema.AGENT_METHODS.document_did_close,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Notifies the agent that a document was saved.
+   *
+   * @experimental
+   */
+  async unstable_didSaveDocument(
+    params: schema.DidSaveDocumentNotification,
+  ): Promise<void> {
+    return await this.#connection.sendNotification(
+      schema.AGENT_METHODS.document_did_save,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Notifies the agent that a document received focus.
+   *
+   * @experimental
+   */
+  async unstable_didFocusDocument(
+    params: schema.DidFocusDocumentNotification,
+  ): Promise<void> {
+    return await this.#connection.sendNotification(
+      schema.AGENT_METHODS.document_did_focus,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Notifies the agent that a NES suggestion was accepted.
+   *
+   * @experimental
+   */
+  async unstable_acceptNes(
+    params: schema.AcceptNesNotification,
+  ): Promise<void> {
+    return await this.#connection.sendNotification(
+      schema.AGENT_METHODS.nes_accept,
+      params,
+    );
+  }
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Notifies the agent that a NES suggestion was rejected.
+   *
+   * @experimental
+   */
+  async unstable_rejectNes(
+    params: schema.RejectNesNotification,
+  ): Promise<void> {
+    return await this.#connection.sendNotification(
+      schema.AGENT_METHODS.nes_reject,
       params,
     );
   }
@@ -1492,6 +1728,9 @@ export interface Agent {
    * - Connect to any specified MCP servers
    * - Return a unique session ID for future requests
    *
+   * The request may include `additionalDirectories` to expand the session's filesystem
+   * scope beyond `cwd` without changing the base for relative paths.
+   *
    * May return an `auth_required` error if the agent requires authentication.
    *
    * See protocol docs: [Session Setup](https://agentclientprotocol.com/protocol/session-setup)
@@ -1509,6 +1748,9 @@ export interface Agent {
    * - Connect to the specified MCP servers
    * - Stream the entire conversation history back to the client via notifications
    *
+   * The request may include `additionalDirectories` to set the complete list of
+   * additional workspace roots for the loaded session.
+   *
    * See protocol docs: [Loading Sessions](https://agentclientprotocol.com/protocol/session-setup#loading-sessions)
    */
   loadSession?(
@@ -1524,6 +1766,9 @@ export interface Agent {
    * Creates a new session based on the context of an existing one, allowing
    * operations like generating summaries without affecting the original session's history.
    *
+   * The request may include `additionalDirectories` to set the complete list of
+   * additional workspace roots for the forked session.
+   *
    * This method is only available if the agent advertises the `session.fork` capability.
    *
    * @experimental
@@ -1537,8 +1782,8 @@ export interface Agent {
    * This method is only available if the agent advertises the `listSessions` capability.
    *
    * Returns a list of sessions with metadata like session ID, working directory,
-   * title, and last update time. Supports filtering by working directory and
-   * cursor-based pagination.
+   * title, and last update time. Supports filtering by working directory,
+   * `additionalDirectories`, and cursor-based pagination.
    */
   listSessions?(
     params: schema.ListSessionsRequest,
@@ -1554,6 +1799,9 @@ export interface Agent {
    *
    * The agent should resume the session context, allowing the conversation to continue
    * without replaying the message history (unlike `session/load`).
+   *
+   * The request may include `additionalDirectories` to set the complete list of
+   * additional workspace roots for the resumed session.
    *
    * @experimental
    */
@@ -1669,6 +1917,105 @@ export interface Agent {
    * See protocol docs: [Cancellation](https://agentclientprotocol.com/protocol/prompt-turn#cancellation)
    */
   cancel(params: schema.CancelNotification): Promise<void>;
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Starts a NES (Next Edit Suggestions) session.
+   *
+   * @experimental
+   */
+  unstable_startNes?(
+    params: schema.StartNesRequest,
+  ): Promise<schema.StartNesResponse>;
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Sends a NES suggestion request.
+   *
+   * @experimental
+   */
+  unstable_suggestNes?(
+    params: schema.SuggestNesRequest,
+  ): Promise<schema.SuggestNesResponse>;
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Closes a NES session.
+   *
+   * @experimental
+   */
+  unstable_closeNes?(
+    params: schema.CloseNesRequest,
+  ): Promise<schema.CloseNesResponse | void>;
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Called when a document is opened.
+   *
+   * @experimental
+   */
+  unstable_didOpenDocument?(
+    params: schema.DidOpenDocumentNotification,
+  ): Promise<void>;
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Called when a document is changed.
+   *
+   * @experimental
+   */
+  unstable_didChangeDocument?(
+    params: schema.DidChangeDocumentNotification,
+  ): Promise<void>;
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Called when a document is closed.
+   *
+   * @experimental
+   */
+  unstable_didCloseDocument?(
+    params: schema.DidCloseDocumentNotification,
+  ): Promise<void>;
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Called when a document is saved.
+   *
+   * @experimental
+   */
+  unstable_didSaveDocument?(
+    params: schema.DidSaveDocumentNotification,
+  ): Promise<void>;
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Called when a document receives focus.
+   *
+   * @experimental
+   */
+  unstable_didFocusDocument?(
+    params: schema.DidFocusDocumentNotification,
+  ): Promise<void>;
+
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Called when a NES suggestion is accepted.
+   *
+   * @experimental
+   */
+  unstable_acceptNes?(params: schema.AcceptNesNotification): Promise<void>;
+  /**
+   * **UNSTABLE**: This capability is not part of the spec yet, and may be removed or changed at any point.
+   *
+   * Called when a NES suggestion is rejected.
+   *
+   * @experimental
+   */
+  unstable_rejectNes?(params: schema.RejectNesNotification): Promise<void>;
 
   /**
    * Extension method
