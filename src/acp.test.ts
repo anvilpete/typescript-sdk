@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  zCreateElicitationRequest,
+  zCreateElicitationResponse,
+} from "./schema/zod.gen.js";
+import {
   Agent,
   ClientSideConnection,
   Client,
@@ -43,6 +47,9 @@ import {
   ListSessionsResponse,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+  CompleteElicitationNotification,
 } from "./acp.js";
 import type { AnyMessage } from "./acp.js";
 
@@ -557,7 +564,7 @@ describe("Connection", () => {
     expect(response.authMethods?.[0].id).toBe("oauth");
   });
 
-  it("preserves unknown properties on known incoming params", async () => {
+  it("strips unknown properties on known incoming params", async () => {
     let receivedInitializeParams: Record<string, unknown> | undefined;
     let receivedSessionUpdate: Record<string, unknown> | undefined;
 
@@ -654,26 +661,20 @@ describe("Connection", () => {
     } as any);
 
     await vi.waitFor(() => {
-      expect(receivedInitializeParams).toMatchObject({
-        extraTopLevel: "keep me",
-        clientCapabilities: {
-          customCapability: {
-            enabled: true,
-          },
-          fs: {
-            experimentalFs: true,
-          },
-        },
-      });
+      expect(receivedInitializeParams).not.toHaveProperty("extraTopLevel");
+      expect(receivedInitializeParams).not.toHaveProperty(
+        "clientCapabilities.customCapability",
+      );
+      expect(receivedInitializeParams).not.toHaveProperty(
+        "clientCapabilities.fs.experimentalFs",
+      );
 
-      expect(receivedSessionUpdate).toMatchObject({
-        extraNotificationField: "keep this too",
-        update: {
-          extraUpdateField: {
-            keep: true,
-          },
-        },
-      });
+      expect(receivedSessionUpdate).not.toHaveProperty(
+        "extraNotificationField",
+      );
+      expect(receivedSessionUpdate).not.toHaveProperty(
+        "update.extraUpdateField",
+      );
     });
   });
 
@@ -1910,5 +1911,394 @@ describe("Connection", () => {
       "/extra/root1",
       "/extra/root2",
     ]);
+  });
+
+  it("handles elicitation request lifecycle", async () => {
+    let receivedRequest: CreateElicitationRequest | undefined;
+    let receivedNotification: CompleteElicitationNotification | undefined;
+
+    class TestClient implements Client {
+      async writeTextFile(
+        _: WriteTextFileRequest,
+      ): Promise<WriteTextFileResponse> {
+        return {};
+      }
+      async readTextFile(
+        _: ReadTextFileRequest,
+      ): Promise<ReadTextFileResponse> {
+        return { content: "" };
+      }
+      async requestPermission(
+        _: RequestPermissionRequest,
+      ): Promise<RequestPermissionResponse> {
+        return { outcome: { outcome: "selected", optionId: "allow" } };
+      }
+      async sessionUpdate(_: SessionNotification): Promise<void> {}
+
+      async unstable_createElicitation(
+        params: CreateElicitationRequest,
+      ): Promise<CreateElicitationResponse> {
+        receivedRequest = params;
+        return {
+          action: "accept",
+          content: { name: "Alice" },
+        };
+      }
+      async unstable_completeElicitation(
+        params: CompleteElicitationNotification,
+      ): Promise<void> {
+        receivedNotification = params;
+      }
+    }
+
+    class TestAgent implements Agent {
+      async initialize(_: InitializeRequest): Promise<InitializeResponse> {
+        return {
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: false },
+          authMethods: [],
+        };
+      }
+      async newSession(_: NewSessionRequest): Promise<NewSessionResponse> {
+        return { sessionId: "test-session" };
+      }
+      async authenticate(_: AuthenticateRequest): Promise<void> {}
+      async prompt(_: PromptRequest): Promise<PromptResponse> {
+        return { stopReason: "end_turn" };
+      }
+      async cancel(_: CancelNotification): Promise<void> {}
+    }
+
+    new ClientSideConnection(
+      () => new TestClient(),
+      ndJsonStream(clientToAgent.writable, agentToClient.readable),
+    );
+    const clientConnection = new AgentSideConnection(
+      () => new TestAgent(),
+      ndJsonStream(agentToClient.writable, clientToAgent.readable),
+    );
+
+    // Test form-mode elicitation request
+    const response = await clientConnection.unstable_createElicitation({
+      sessionId: "test-session",
+      mode: "form",
+      message: "Please enter your name",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Your name" },
+        },
+      },
+    });
+
+    expect(response.action).toBe("accept");
+    expect(receivedRequest?.message).toBe("Please enter your name");
+    expect((receivedRequest as any)?.sessionId).toBe("test-session");
+    expect((receivedRequest as any)?.mode).toBe("form");
+
+    // Test url-mode elicitation request
+    receivedRequest = undefined;
+    const urlResponse = await clientConnection.unstable_createElicitation({
+      sessionId: "test-session",
+      mode: "url",
+      message: "Please authenticate",
+      elicitationId: "elic-url-1",
+      url: "https://example.com/auth",
+    });
+
+    expect(urlResponse.action).toBe("accept");
+    expect((receivedRequest as any)?.message).toBe("Please authenticate");
+    expect((receivedRequest as any)?.mode).toBe("url");
+    expect((receivedRequest as any)?.url).toBe("https://example.com/auth");
+    expect((receivedRequest as any)?.elicitationId).toBe("elic-url-1");
+
+    // Test elicitation complete notification
+    await clientConnection.unstable_completeElicitation({
+      elicitationId: "elic-1",
+    });
+
+    await vi.waitFor(() => {
+      expect(receivedNotification?.elicitationId).toBe("elic-1");
+    });
+  });
+
+  it("silently ignores completeElicitation when client does not implement handler", async () => {
+    class TestClient implements Client {
+      async writeTextFile(
+        _: WriteTextFileRequest,
+      ): Promise<WriteTextFileResponse> {
+        return {};
+      }
+      async readTextFile(
+        _: ReadTextFileRequest,
+      ): Promise<ReadTextFileResponse> {
+        return { content: "" };
+      }
+      async requestPermission(
+        _: RequestPermissionRequest,
+      ): Promise<RequestPermissionResponse> {
+        return { outcome: { outcome: "selected", optionId: "allow" } };
+      }
+      async sessionUpdate(_: SessionNotification): Promise<void> {}
+    }
+
+    class TestAgent implements Agent {
+      async initialize(_: InitializeRequest): Promise<InitializeResponse> {
+        return {
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: false },
+          authMethods: [],
+        };
+      }
+      async newSession(_: NewSessionRequest): Promise<NewSessionResponse> {
+        return { sessionId: "test-session" };
+      }
+      async authenticate(_: AuthenticateRequest): Promise<void> {}
+      async prompt(_: PromptRequest): Promise<PromptResponse> {
+        return { stopReason: "end_turn" };
+      }
+      async cancel(_: CancelNotification): Promise<void> {}
+    }
+
+    new ClientSideConnection(
+      () => new TestClient(),
+      ndJsonStream(clientToAgent.writable, agentToClient.readable),
+    );
+    const clientConnection = new AgentSideConnection(
+      () => new TestAgent(),
+      ndJsonStream(agentToClient.writable, clientToAgent.readable),
+    );
+
+    await clientConnection.unstable_completeElicitation({
+      elicitationId: "elic-1",
+    });
+  });
+
+  it("rejects elicitation request when client does not implement handler", async () => {
+    // Client WITHOUT unstable_createElicitation
+    class TestClient implements Client {
+      async writeTextFile(
+        _: WriteTextFileRequest,
+      ): Promise<WriteTextFileResponse> {
+        return {};
+      }
+      async readTextFile(
+        _: ReadTextFileRequest,
+      ): Promise<ReadTextFileResponse> {
+        return { content: "" };
+      }
+      async requestPermission(
+        _: RequestPermissionRequest,
+      ): Promise<RequestPermissionResponse> {
+        return { outcome: { outcome: "selected", optionId: "allow" } };
+      }
+      async sessionUpdate(_: SessionNotification): Promise<void> {}
+    }
+
+    class TestAgent implements Agent {
+      async initialize(_: InitializeRequest): Promise<InitializeResponse> {
+        return {
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: false },
+          authMethods: [],
+        };
+      }
+      async newSession(_: NewSessionRequest): Promise<NewSessionResponse> {
+        return { sessionId: "test-session" };
+      }
+      async authenticate(_: AuthenticateRequest): Promise<void> {}
+      async prompt(_: PromptRequest): Promise<PromptResponse> {
+        return { stopReason: "end_turn" };
+      }
+      async cancel(_: CancelNotification): Promise<void> {}
+    }
+
+    new ClientSideConnection(
+      () => new TestClient(),
+      ndJsonStream(clientToAgent.writable, agentToClient.readable),
+    );
+    const clientConnection = new AgentSideConnection(
+      () => new TestAgent(),
+      ndJsonStream(agentToClient.writable, clientToAgent.readable),
+    );
+
+    await expect(
+      clientConnection.unstable_createElicitation({
+        sessionId: "test-session",
+        mode: "form",
+        message: "Enter your name",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: -32601 });
+  });
+});
+
+describe("CreateElicitationRequest schema", () => {
+  // These tests verify the post-processed zod schema correctly enforces
+  // both the scope union (session vs request) and mode discriminator (form vs url).
+  // If the generate.js patches stop applying, these will fail.
+
+  const formSessionRequest = {
+    sessionId: "sess-1",
+    mode: "form" as const,
+    message: "Enter your name",
+    requestedSchema: { type: "object" as const, properties: {} },
+  };
+
+  it("accepts form-mode request scoped to a session", () => {
+    const result = zCreateElicitationRequest.safeParse(formSessionRequest);
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts form-mode request with optional toolCallId", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      ...formSessionRequest,
+      toolCallId: "tc-1",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts form-mode request scoped to a request", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      requestId: "req-1",
+      mode: "form",
+      message: "Enter your name",
+      requestedSchema: { type: "object", properties: {} },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts url-mode request scoped to a session", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      sessionId: "sess-1",
+      mode: "url",
+      message: "Please authenticate",
+      elicitationId: "elic-1",
+      url: "https://example.com/auth",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts url-mode request with optional toolCallId", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      sessionId: "sess-1",
+      toolCallId: "tc-1",
+      mode: "url",
+      message: "Please authenticate",
+      elicitationId: "elic-1",
+      url: "https://example.com/auth",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts url-mode request scoped to a request", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      requestId: "req-1",
+      mode: "url",
+      message: "Please authenticate",
+      elicitationId: "elic-1",
+      url: "https://example.com/auth",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects request without mode", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      sessionId: "sess-1",
+      message: "Enter your name",
+      requestedSchema: { type: "object", properties: {} },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects request with invalid mode", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      sessionId: "sess-1",
+      mode: "invalid",
+      message: "Enter your name",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects request without message", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      sessionId: "sess-1",
+      mode: "form",
+      requestedSchema: { type: "object", properties: {} },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects form-mode request without scope (no sessionId or requestId)", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      mode: "form",
+      message: "Enter your name",
+      requestedSchema: { type: "object", properties: {} },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects url-mode request without scope (no sessionId or requestId)", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      mode: "url",
+      message: "Please authenticate",
+      elicitationId: "elic-1",
+      url: "https://example.com/auth",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("strips unknown properties", () => {
+    const result = zCreateElicitationRequest.safeParse({
+      ...formSessionRequest,
+      customField: "custom-value",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as any).customField).toBeUndefined();
+    }
+  });
+});
+
+describe("CreateElicitationResponse schema", () => {
+  it("accepts accept action with content", () => {
+    const result = zCreateElicitationResponse.safeParse({
+      action: "accept",
+      content: { name: "Alice" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts decline action", () => {
+    const result = zCreateElicitationResponse.safeParse({
+      action: "decline",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts cancel action", () => {
+    const result = zCreateElicitationResponse.safeParse({
+      action: "cancel",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects response without action", () => {
+    const result = zCreateElicitationResponse.safeParse({
+      content: { name: "Alice" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects response with invalid action", () => {
+    const result = zCreateElicitationResponse.safeParse({
+      action: "invalid",
+    });
+    expect(result.success).toBe(false);
   });
 });

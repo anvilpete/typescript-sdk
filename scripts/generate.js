@@ -5,7 +5,7 @@ import * as fs from "fs/promises";
 import { dirname } from "path";
 import * as prettier from "prettier";
 
-const CURRENT_SCHEMA_RELEASE = "v0.11.4";
+const CURRENT_SCHEMA_RELEASE = "v0.11.6";
 
 await main();
 
@@ -42,13 +42,16 @@ async function main() {
     ],
   });
 
+  const schemaDefs = JSON.parse(
+    await fs.readFile("./schema/schema.json", "utf8"),
+  ).$defs;
+
   const zodPath = "./src/schema/zod.gen.ts";
   const zodSrc = await fs.readFile(zodPath, "utf8");
   const zod = await prettier.format(
     updateDocs(
       zodSrc
         .replace(`from "zod"`, `from "zod/v4"`)
-        .replaceAll(/z\.object\(/g, "z.looseObject(")
         // Weird type issue
         .replaceAll(
           /z\.record\((?!z\.string\(\),\s*)([^)]+)\)/g,
@@ -62,6 +65,7 @@ async function main() {
           /z\.coerce\s*\.bigint\(\)\s*\.gte\(BigInt\(0\)\)\s*\.max\(BigInt\("18446744073709551615"\),\s*\{\s*message:\s*"Invalid value: Expected uint64 to be <= 18446744073709551615",\s*\}\s*\)/gm,
           "z.number()",
         ),
+      schemaDefs,
     ),
     { parser: "typescript" },
   );
@@ -75,6 +79,7 @@ async function main() {
         `export type ClientOptions`,
         `// eslint-disable-next-line @typescript-eslint/no-unused-vars\ntype ClientOptions`,
       ),
+      schemaDefs,
     ),
     { parser: "typescript" },
   );
@@ -140,8 +145,28 @@ async function downloadSchemas(tag) {
   console.log("Schema files downloaded successfully\n");
 }
 
-function updateDocs(src) {
+function updateDocs(src, schemaDefs) {
   let result = src;
+
+  // Inject missing doc comments from schema descriptions.
+  // The code generator drops JSDoc for types that produce intersection types
+  // (schemas using oneOf/anyOf combined with properties).
+  if (schemaDefs) {
+    for (const [name, def] of Object.entries(schemaDefs)) {
+      if (!def.description) continue;
+
+      result = injectDocIfMissing(
+        result,
+        `export type ${name} =`,
+        def.description,
+      );
+      result = injectDocIfMissing(
+        result,
+        `export const z${name} =`,
+        def.description,
+      );
+    }
+  }
 
   // Replace UNSTABLE comments with @experimental at the end of the comment block
   result = result.replace(
@@ -150,4 +175,18 @@ function updateDocs(src) {
   );
 
   return result;
+}
+
+function injectDocIfMissing(src, exportStr, description) {
+  const idx = src.indexOf(exportStr);
+  if (idx === -1) return src;
+
+  const before = src.substring(0, idx);
+  if (/\*\/\s*$/.test(before)) return src;
+
+  const lines = description.split("\n");
+  const jsdoc =
+    "/**\n" + lines.map((l) => (l ? ` * ${l}` : " *")).join("\n") + "\n */\n";
+
+  return src.slice(0, idx) + jsdoc + src.slice(idx);
 }
