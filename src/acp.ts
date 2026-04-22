@@ -1294,6 +1294,8 @@ class Connection {
 
           try {
             this.processMessage(message);
+            // Ensure any response handlers are called before processing the next message
+            await new Promise(resolve => setTimeout(resolve, 0));
           } catch (err) {
             console.error(
               "Unexpected error during message processing:",
