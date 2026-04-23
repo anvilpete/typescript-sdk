@@ -480,13 +480,19 @@ describe("Connection", () => {
     let agentConnection: ClientSideConnection | null = null;
 
     class TestClient implements Client {
-      async writeTextFile(_: WriteTextFileRequest): Promise<WriteTextFileResponse> {
+      async writeTextFile(
+        _: WriteTextFileRequest,
+      ): Promise<WriteTextFileResponse> {
         return {};
       }
-      async readTextFile(_: ReadTextFileRequest): Promise<ReadTextFileResponse> {
+      async readTextFile(
+        _: ReadTextFileRequest,
+      ): Promise<ReadTextFileResponse> {
         return { content: "" };
       }
-      async requestPermission(_: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+      async requestPermission(
+        _: RequestPermissionRequest,
+      ): Promise<RequestPermissionResponse> {
         const listResponse = await agentConnection!.listSessions({});
         expect(listResponse.sessions).toEqual([]);
         return { outcome: { outcome: "selected", optionId: "allow" } };
@@ -510,7 +516,9 @@ describe("Connection", () => {
         return { stopReason: "end_turn" };
       }
       async cancel(_: CancelNotification): Promise<void> {}
-      async listSessions(_: ListSessionsRequest): Promise<ListSessionsResponse> {
+      async listSessions(
+        _: ListSessionsRequest,
+      ): Promise<ListSessionsResponse> {
         return { sessions: [] };
       }
     }
@@ -532,7 +540,9 @@ describe("Connection", () => {
         kind: "execute",
         status: "pending",
         toolCallId: "tool-123",
-        content: [{ type: "content", content: { type: "text", text: "ls -la" } }],
+        content: [
+          { type: "content", content: { type: "text", text: "ls -la" } },
+        ],
       },
       options: [
         { kind: "allow_once", name: "Allow", optionId: "allow" },
@@ -542,10 +552,13 @@ describe("Connection", () => {
 
     expect(permissionResponse.outcome.outcome).toBe("selected");
   });
-  
+
   it("processes notification after response when both arrive in quick succession", async () => {
     const events: string[] = [];
-    const { promise: sessionNotification, resolve: resolveSessionNotification } = Promise.withResolvers<void>();
+    const {
+      promise: sessionNotification,
+      resolve: resolveSessionNotification,
+    } = Promise.withResolvers<void>();
 
     class TestClient implements Client {
       async writeTextFile(
@@ -570,7 +583,7 @@ describe("Connection", () => {
       }
       async sessionUpdate(_params: SessionNotification): Promise<void> {
         // Record the session notification
-        events.push("SessionNotification")
+        events.push("SessionNotification");
         resolveSessionNotification();
       }
     }
@@ -592,15 +605,37 @@ describe("Connection", () => {
     const requestReader = clientToAgent.readable.getReader();
     const { value: requestChunk } = await requestReader.read();
     requestReader.releaseLock();
-    const { id: requestId } = JSON.parse(new TextDecoder().decode(requestChunk));
+    const { id: requestId } = JSON.parse(
+      new TextDecoder().decode(requestChunk),
+    );
 
     // Write response and notification in quick succession
     const sessionId = "test-session";
     const writer = agentToClient.writable.getWriter();
-    await writer.write(new TextEncoder().encode(JSON.stringify(
-        { jsonrpc: "2.0", id: requestId, result: { sessionId } }) + "\n"));
-    await writer.write(new TextEncoder().encode(JSON.stringify(
-        { jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "available_commands_update", availableCommands: [] } } }) + "\n"));
+    await writer.write(
+      new TextEncoder().encode(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: requestId,
+          result: { sessionId },
+        }) + "\n",
+      ),
+    );
+    await writer.write(
+      new TextEncoder().encode(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId,
+            update: {
+              sessionUpdate: "available_commands_update",
+              availableCommands: [],
+            },
+          },
+        }) + "\n",
+      ),
+    );
     writer.releaseLock();
 
     await newSessionResponse;
